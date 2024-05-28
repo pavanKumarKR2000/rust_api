@@ -1,30 +1,22 @@
-#[macro_use] 
+#[macro_use]
 extern crate diesel;
 extern crate dotenv;
 
 mod schema;
-use crate::schema::*;
+mod models;
 
-//use schema::posts;
 use actix_web::{web, App, HttpServer, Responder, HttpResponse};
-use serde::{Deserialize, Serialize};
 use diesel::prelude::*;
-use diesel::{Queryable, Insertable};
 use diesel::pg::PgConnection;
 use dotenv::dotenv;
+use serde::{Serialize, Deserialize};
 use std::env;
 use std::sync::Mutex;
-
-#[derive(Debug, Serialize, Deserialize, Queryable, Insertable)]
-struct Post {
-    id: i32,
-    details: String,
-    name: String,
-}
+use crate::models::Post;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct PostData {
-    details: String,
+    details: serde_json::Value,
     id: i32,
 }
 
@@ -37,54 +29,46 @@ async fn create_post(dynamic: web::Path<String>, payload: web::Json<PostData>, c
     let details = &payload.details;
     let name = dynamic.into_inner();
 
-    let connection = connection.lock().expect("Failed to lock connection");
+    let mut connection = connection.lock().expect("Failed to lock connection");
 
-    // Check if a post with the provided key and ID already exists
-    let existing_post = posts::table
-        .filter(posts::name.eq(&name).and(posts::id.eq(&id)))
-        .first::<Post>(&*connection)
+    let existing_post = schema::posts::table
+        .filter(schema::posts::name.eq(&name).and(schema::posts::id.eq(&id)))
+        .first::<Post>(&mut *connection)
         .optional();
-
-    match existing_post {
+match existing_post {
         Ok(Some(_)) => {
-            // A post with the same key and ID already exists
-            // Respond with an error message
-            HttpResponse::Conflict().body(format!("Conflict: Post with key '{}' already exists with the same ID", name))
+            HttpResponse::Conflict().body(format!("Conflict: Post with key '{}' already exists with the same ID {}", name,id))
         },
         Ok(None) => {
-            // No post with the provided key and ID exists
-            // Create the new post
-            let new_post = Post { id, details: details.to_string(), name };
-           match diesel::insert_into(posts::table)
+            let new_post = Post { id, details: details.clone(), name };
+
+            match diesel::insert_into(schema::posts::table)
                 .values(&new_post)
-                .execute(&*connection)
+                .execute(&mut *connection)
             {
                 Ok(_) => {
-                    // Successfully inserted the post
-                    // Respond with the newly created post
                     HttpResponse::Ok().json(new_post)
                 },
                 Err(err) => {
-                    // Handle the error if insertion fails
                     println!("Error inserting post: {:?}", err);
                     HttpResponse::InternalServerError().finish()
                 }
             }
         },
         Err(err) => {
-            // Handle the error if the query fails
             println!("Error querying post: {:?}", err);
             HttpResponse::InternalServerError().finish()
         }
     }
 }
+
 async fn get_data(dynamic: web::Path<(String, i32)>, connection: web::Data<Mutex<PgConnection>>) -> impl Responder {
     let (name, id) = dynamic.into_inner();
 
-    let connection = connection.lock().expect("Failed to lock connection");
-    let result = posts::table
-        .filter(posts::name.eq(&name).and(posts::id.eq(&id)))
-        .first::<Post>(&*connection);
+    let mut connection = connection.lock().expect("Failed to lock connection");
+    let result = schema::posts::table
+        .filter(schema::posts::name.eq(&name).and(schema::posts::id.eq(&id)))
+        .first::<Post>(&mut *connection);
 
     match result {
         Ok(post) => HttpResponse::Ok().json(post),
@@ -99,6 +83,7 @@ fn establish_connection() -> PgConnection {
     PgConnection::establish(&database_url)
         .expect(&format!("Error connecting to {}", database_url))
 }
+
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     let connection = web::Data::new(Mutex::new(establish_connection()));
@@ -114,4 +99,3 @@ async fn main() -> std::io::Result<()> {
     .run()
     .await
 }
-

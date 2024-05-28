@@ -3,7 +3,7 @@
 diesel::table! {
     posts (id, name) {
         id -> Int4,
-        details -> Text,
+        details -> Jsonb,
         name -> Text,
     }
 }
